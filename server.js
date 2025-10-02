@@ -38,13 +38,56 @@ app.get("/webhook", (req, res) => {
 });
 
 // POST for events
-app.post("/webhook", (req, res) => {
-  // Meta sends Instagram updates under the "instagram" object with a "messages" field
-  // You will normalize this later; for now just log + 200
-  console.log("IG webhook payload:", JSON.stringify(req.body, null, 2));
+app.post("/webhook", async (req, res) => {
+  try {
+    const body = req.body;
 
-  // TODO: trigger your handler here when you detect a DM message event
-  res.sendStatus(200);
+    if (body.object === "page" && body.entry) {
+      for (const entry of body.entry) {
+        if (entry.changes) {
+          for (const change of entry.changes) {
+            if (change.field === "messages" && change.value) {
+              const val = change.value;
+              const senderId = val.from;
+              const messageId = val.id;
+              const text = val.message?.text || null;
+              const pageId = entry.id; // FB page id
+
+              console.log("📩 New IG DM:", { senderId, text, pageId });
+
+              // find user row by page_id
+              const { data: rows } = await supabase
+                .from("auth_tokens")
+                .select("user_id, ig_id")
+                .eq("page_id", pageId)
+                .limit(1);
+
+              if (rows && rows.length > 0) {
+                const userId = rows[0].user_id;
+                const igId = rows[0].ig_id;
+
+                await supabase.from("messages").insert([
+                  {
+                    user_id: userId,
+                    page_id: pageId,
+                    ig_id: igId,
+                    sender_id: senderId,
+                    message_text: text,
+                    message_id: messageId,
+                  },
+                ]);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    res.sendStatus(200);
+  } catch (err) {
+    console.error("Webhook error:", err);
+    res.sendStatus(500);
+  }
 });
 
 app.get("/auth/callback", async (req, res) => {
