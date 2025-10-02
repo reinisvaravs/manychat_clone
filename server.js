@@ -39,47 +39,44 @@ app.get("/webhook", (req, res) => {
 
 // POST for events
 app.post("/webhook", async (req, res) => {
-  console.log("📨 Webhook received:", JSON.stringify(req.body, null, 2));
-
   try {
+    console.log("📨 Webhook received:", JSON.stringify(req.body, null, 2));
     const body = req.body;
 
-    if (body.object === "page" && body.entry) {
+    if (body.object === "page" || body.object === "instagram") {
       for (const entry of body.entry) {
+        // --- Case 1: Instagram messages via "changes"
         if (entry.changes) {
           for (const change of entry.changes) {
             if (change.field === "messages" && change.value) {
               const val = change.value;
               const senderId = val.from;
-              const messageId = val.id;
               const text = val.message?.text || null;
-              const pageId = entry.id; // FB page id
+              const pageId = entry.id;
 
-              console.log("📩 New IG DM:", { senderId, text, pageId });
+              console.log("📩 IG DM (changes):", { senderId, text, pageId });
 
-              // find user row by page_id
-              const { data: rows } = await supabase
-                .from("auth_tokens")
-                .select("user_id, ig_id")
-                .eq("page_id", pageId)
-                .limit(1);
-
-              if (rows && rows.length > 0) {
-                const userId = rows[0].user_id;
-                const igId = rows[0].ig_id;
-
-                await supabase.from("messages").insert([
-                  {
-                    user_id: userId,
-                    page_id: pageId,
-                    ig_id: igId,
-                    sender_id: senderId,
-                    message_text: text,
-                    message_id: messageId,
-                  },
-                ]);
-              }
+              await saveMessageToSupabase(pageId, senderId, text, val.id);
             }
+          }
+        }
+
+        // --- Case 2: Instagram messages via "messaging"
+        if (entry.messaging) {
+          for (const msg of entry.messaging) {
+            const senderId = msg.sender?.id;
+            const recipientId = msg.recipient?.id;
+            const text = msg.message?.text || null;
+            const messageId = msg.message?.mid;
+
+            console.log("📩 IG DM (messaging):", {
+              senderId,
+              recipientId,
+              text,
+              messageId,
+            });
+
+            await saveMessageToSupabase(recipientId, senderId, text, messageId);
           }
         }
       }
@@ -91,6 +88,31 @@ app.post("/webhook", async (req, res) => {
     res.sendStatus(500);
   }
 });
+
+// helper function to save messages
+async function saveMessageToSupabase(pageId, senderId, text, messageId) {
+  const { data: rows } = await supabase
+    .from("auth_tokens")
+    .select("user_id, ig_id")
+    .or(`page_id.eq.${pageId},ig_id.eq.${pageId}`) // handle page or ig_id
+    .limit(1);
+
+  if (rows && rows.length > 0) {
+    const userId = rows[0].user_id;
+    const igId = rows[0].ig_id;
+
+    await supabase.from("messages").insert([
+      {
+        user_id: userId,
+        page_id: pageId,
+        ig_id: igId,
+        sender_id: senderId,
+        message_text: text,
+        message_id: messageId,
+      },
+    ]);
+  }
+}
 
 app.get("/auth/callback", async (req, res) => {
   const code = req.query.code;
