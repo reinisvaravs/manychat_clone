@@ -81,11 +81,14 @@ app.get("/auth/callback", async (req, res) => {
     console.log("User logged in:", me);
 
     // 4. Save or update user token in Supabase (upsert ensures no duplicates)
-    await supabase.from("auth_tokens").upsert({
-      user_id: me.id,
-      access_token: longData.access_token,
-      expires_in: longData.expires_in,
-    });
+    await supabase.from("auth_tokens").upsert(
+      {
+        user_id: me.id,
+        access_token: longData.access_token,
+        expires_in: longData.expires_in,
+      },
+      { onConflict: "user_id" } // <-- tell Supabase to merge on user_id
+    );
 
     console.log("Saved user token in Supabase for user", me.id);
 
