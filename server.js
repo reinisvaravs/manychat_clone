@@ -78,18 +78,18 @@ app.get("/auth/callback", async (req, res) => {
     );
     const me = await meRes.json();
 
-    // Save user token
-    await supabase.from("auth_tokens").insert([
-      {
-        user_id: me.id,
-        access_token: longData.access_token,
-        expires_in: longData.expires_in,
-      },
-    ]);
+    console.log("User logged in:", me);
 
-    console.log("Saved token in Supabase for user", me.id);
+    // 4. Save or update user token in Supabase (upsert ensures no duplicates)
+    await supabase.from("auth_tokens").upsert({
+      user_id: me.id,
+      access_token: longData.access_token,
+      expires_in: longData.expires_in,
+    });
 
-    // 4. Fetch Pages
+    console.log("Saved user token in Supabase for user", me.id);
+
+    // 5. Fetch Pages this user manages
     const pagesRes = await fetch(
       `https://graph.facebook.com/v20.0/me/accounts?access_token=${longData.access_token}`
     );
@@ -99,52 +99,72 @@ app.get("/auth/callback", async (req, res) => {
       for (const page of pagesData.data) {
         const pageId = page.id;
         const pageName = page.name;
-
-        // 5. Get Page access token
-        const pageRes = await fetch(
-          `https://graph.facebook.com/v20.0/${pageId}?fields=access_token&access_token=${longData.access_token}`
-        );
-        const pageData = await pageRes.json();
-        const pageAccessToken = pageData.access_token;
+        const pageAccessToken = page.access_token; // included in response
 
         let igId = null;
         let igUsername = null;
 
-        // 6. Check if page has IG business account
+        // 6. If page has an Instagram business account, fetch IG username
         if (page.instagram_business_account) {
           igId = page.instagram_business_account.id;
 
-          // fetch IG username
           const igRes = await fetch(
             `https://graph.facebook.com/v20.0/${igId}?fields=username&access_token=${pageAccessToken}`
           );
           const igData = await igRes.json();
-          igUsername = igData.username;
+          igUsername = igData.username || null;
         }
 
-        // 7. Save page + IG info in Supabase
-        const { error } = await supabase.from("auth_tokens").insert([
-          {
-            user_id: me.id,
+        // 7. Update Supabase row for this user with Page + IG info
+        const { error: updateError } = await supabase
+          .from("auth_tokens")
+          .update({
             page_id: pageId,
             page_name: pageName,
             page_access_token: pageAccessToken,
             ig_id: igId,
             ig_username: igUsername,
-          },
-        ]);
+          })
+          .eq("user_id", me.id);
 
-        if (error) {
-          console.error("Error saving page info:", error);
+        if (updateError) {
+          console.error("Error updating page info:", updateError);
         } else {
-          console.log(
-            `Saved page ${pageName} (${pageId}) with IG ${igUsername}`
-          );
+          console.log(`Updated Supabase with page ${pageName} (${pageId})`);
+        }
+
+        // 8. Auto-subscribe this Page to webhook
+        const subRes = await fetch(
+          `https://graph.facebook.com/v20.0/${pageId}/subscribed_apps`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              subscribed_fields: ["messages"],
+              access_token: pageAccessToken,
+            }),
+          }
+        );
+        const subData = await subRes.json();
+
+        if (subData.success) {
+          console.log(`✅ Subscribed page ${pageName} (${pageId}) to webhook`);
+          await supabase
+            .from("auth_tokens")
+            .update({
+              subscribed: true,
+              last_subscribed_at: new Date().toISOString(),
+            })
+            .eq("user_id", me.id);
+        } else {
+          console.error("❌ Failed to subscribe page:", subData);
         }
       }
     }
 
-    res.send("Instagram connected and data saved! You can close this window.");
+    res.send(
+      "Instagram connected, Pages/IG saved, and webhook subscribed! You can close this window."
+    );
   } catch (err) {
     console.error("Error in callback:", err);
     res.status(500).send("Auth failed");
