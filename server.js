@@ -137,8 +137,9 @@ app.get("/auth/callback", async (req, res) => {
 
     // 5. Fetch Pages this user manages
     const pagesRes = await fetch(
-      `https://graph.facebook.com/v20.0/me/accounts?access_token=${longData.access_token}`
+      `https://graph.facebook.com/v20.0/me/accounts?fields=id,name,access_token,instagram_business_account&access_token=${longData.access_token}`
     );
+
     const pagesData = await pagesRes.json();
 
     if (pagesData.data && pagesData.data.length > 0) {
@@ -154,8 +155,9 @@ app.get("/auth/callback", async (req, res) => {
         if (page.instagram_business_account) {
           igId = page.instagram_business_account.id;
 
+          // fetch IG username
           const igRes = await fetch(
-            `https://graph.facebook.com/v20.0/${igId}?fields=username&access_token=${pageAccessToken}`
+            `https://graph.facebook.com/v20.0/${igId}?fields=username&access_token=${page.access_token}`
           );
           const igData = await igRes.json();
           igUsername = igData.username || null;
