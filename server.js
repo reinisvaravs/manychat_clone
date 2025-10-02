@@ -39,6 +39,8 @@ app.get("/webhook", (req, res) => {
 
 // POST for events
 app.post("/webhook", async (req, res) => {
+  console.log("📨 Webhook received:", JSON.stringify(req.body, null, 2));
+
   try {
     const body = req.body;
 
