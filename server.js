@@ -41,6 +41,7 @@ app.get("/webhook", (req, res) => {
 app.post("/webhook", async (req, res) => {
   try {
     const body = req.body;
+    console.log("Webhook event received:", JSON.stringify(body, null, 2));
 
     if (body.object === "page" || body.object === "instagram") {
       for (const entry of body.entry) {
