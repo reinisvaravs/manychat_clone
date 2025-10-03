@@ -42,21 +42,23 @@ app.post("/webhook", async (req, res) => {
   try {
     const body = req.body;
     console.log("Webhook event received:", JSON.stringify(body, null, 2));
+    if (!entry.changes && !entry.messaging) {
+      console.log("⚠️ Unhandled webhook entry:", entry);
+    }
 
     if (body.object === "page" || body.object === "instagram") {
       for (const entry of body.entry) {
         // --- Case 1: Instagram messages via "changes"
         if (entry.changes) {
           for (const change of entry.changes) {
-            if (change.field === "messages" && change.value) {
-              const val = change.value;
-              const senderId = val.from;
-              const text = val.message?.text || null;
-              const pageId = entry.id;
-
-              console.log("📩 IG DM (changes):", { senderId, text, pageId });
-
-              await saveMessageToSupabase(pageId, senderId, text, val.id);
+            console.log("🔔 Change event:", change);
+            const val = change.value;
+            if (val) {
+              const senderId = val.from || val.sender_id;
+              const text = val.message?.text || val.text || null;
+              const messageId = val.id || val.mid;
+              console.log("📩 IG DM detected:", { senderId, text, messageId });
+              await saveMessageToSupabase(entry.id, senderId, text, messageId);
             }
           }
         }
@@ -212,12 +214,33 @@ app.get("/auth/callback", async (req, res) => {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              subscribed_fields: ["messages"],
+              subscribed_fields: [
+                "messages",
+                "messaging_postbacks",
+                "message_reactions",
+                "message_deliveries",
+                "instagram_messages",
+              ],
               access_token: pageAccessToken,
             }),
           }
         );
         const subData = await subRes.json();
+
+        if (igId) {
+          await fetch(
+            `https://graph.facebook.com/v20.0/${igId}/subscribed_apps`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                subscribed_fields: ["instagram_messages"],
+                access_token: pageAccessToken,
+              }),
+            }
+          );
+          console.log(`✅ Subscribed IG account ${igId}`);
+        }
 
         if (subData.success) {
           console.log(`✅ Subscribed page ${pageName} (${pageId}) to webhook`);
