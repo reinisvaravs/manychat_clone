@@ -219,7 +219,6 @@ app.get("/auth/callback", async (req, res) => {
                 "messaging_postbacks",
                 "message_reactions",
                 "message_deliveries",
-                "instagram_messages",
               ],
               access_token: pageAccessToken,
             }),
