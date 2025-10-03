@@ -42,12 +42,13 @@ app.post("/webhook", async (req, res) => {
   try {
     const body = req.body;
     console.log("Webhook event received:", JSON.stringify(body, null, 2));
-    if (!entry.changes && !entry.messaging) {
-      console.log("⚠️ Unhandled webhook entry:", entry);
-    }
 
     if (body.object === "page" || body.object === "instagram") {
       for (const entry of body.entry) {
+        if (!entry.changes && !entry.messaging) {
+          console.log("⚠️ Unhandled webhook entry:", entry);
+        }
+
         // --- Case 1: Instagram messages via "changes"
         if (entry.changes) {
           for (const change of entry.changes) {
@@ -63,7 +64,7 @@ app.post("/webhook", async (req, res) => {
           }
         }
 
-        // --- Case 2: Instagram messages via "messaging"
+        // --- Case 2: Messenger messages via "messaging"
         if (entry.messaging) {
           for (const msg of entry.messaging) {
             const senderId = msg.sender?.id;
@@ -71,7 +72,7 @@ app.post("/webhook", async (req, res) => {
             const text = msg.message?.text || null;
             const messageId = msg.message?.mid;
 
-            console.log("📩 IG DM (messaging):", {
+            console.log("📩 Messenger DM:", {
               senderId,
               recipientId,
               text,
