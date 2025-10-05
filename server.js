@@ -20,11 +20,12 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
+// serve landing page
 app.get("/", (req, res) => {
   res.sendFile(__dirname + "/index.html");
 });
 
-// GET for verification handshake
+// --- ✅ Webhook verification handshake
 app.get("/webhook", (req, res) => {
   const verifyToken = process.env.VERIFY_TOKEN;
   const mode = req.query["hub.mode"];
@@ -37,50 +38,27 @@ app.get("/webhook", (req, res) => {
   return res.sendStatus(403);
 });
 
-// POST for events
+// --- ✅ Instagram webhook listener
 app.post("/webhook", async (req, res) => {
   try {
     const body = req.body;
-    console.log("Webhook received:", JSON.stringify(body, null, 2));
+    console.log("📥 Webhook received:", JSON.stringify(body, null, 2));
 
-    if (body.object === "page" || body.object === "instagram") {
+    // only handle instagram DMs
+    if (body.object === "instagram" && body.entry) {
       for (const entry of body.entry) {
-        if (!entry.changes && !entry.messaging) {
-          console.log("⚠️ Unhandled webhook entry:", entry);
-        }
+        if (!entry.changes) continue;
 
-        // --- Case 1: Instagram messages via "changes"
-        if (entry.changes) {
-          for (const change of entry.changes) {
-            console.log("🔔 Change event:", change);
-            const val = change.value;
-            if (val) {
-              const senderId = val.from || val.sender_id;
-              const text = val.message?.text || val.text || null;
-              const messageId = val.id || val.mid;
-              console.log("📩 IG DM detected:", { senderId, text, messageId });
-              await saveMessageToSupabase(entry.id, senderId, text, messageId);
-            }
-          }
-        }
+        for (const change of entry.changes) {
+          const val = change.value;
+          if (!val) continue;
 
-        // --- Case 2: Messenger messages via "messaging"
-        if (entry.messaging) {
-          for (const msg of entry.messaging) {
-            const senderId = msg.sender?.id;
-            const recipientId = msg.recipient?.id;
-            const text = msg.message?.text || null;
-            const messageId = msg.message?.mid;
+          const senderId = val.from || val.sender_id;
+          const text = val.message?.text || val.text || null;
+          const messageId = val.id || val.mid;
 
-            console.log("📩 Messenger DM:", {
-              senderId,
-              recipientId,
-              text,
-              messageId,
-            });
-
-            await saveMessageToSupabase(recipientId, senderId, text, messageId);
-          }
+          console.log("💬 Instagram DM:", { senderId, text, messageId });
+          await saveMessageToSupabase(entry.id, senderId, text, messageId);
         }
       }
     }
@@ -92,12 +70,12 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// helper function to save messages
+// --- ✅ helper: save messages
 async function saveMessageToSupabase(pageId, senderId, text, messageId) {
   const { data: rows } = await supabase
     .from("auth_tokens")
     .select("user_id, ig_id")
-    .or(`page_id.eq.${pageId},ig_id.eq.${pageId}`) // handle page or ig_id
+    .or(`page_id.eq.${pageId},ig_id.eq.${pageId}`)
     .limit(1);
 
   if (rows && rows.length > 0) {
@@ -117,6 +95,7 @@ async function saveMessageToSupabase(pageId, senderId, text, messageId) {
   }
 }
 
+// --- ✅ Auth callback
 app.get("/auth/callback", async (req, res) => {
   const code = req.query.code;
   if (!code) return res.status(400).send("No code provided");
@@ -131,10 +110,7 @@ app.get("/auth/callback", async (req, res) => {
         `&code=${code}`
     );
     const data = await tokenRes.json();
-    if (data.error) {
-      console.error("Error getting short-lived token:", data.error);
-      return res.status(500).send("Auth failed");
-    }
+    if (data.error) throw new Error(data.error.message);
 
     // 2. Exchange for long-lived token
     const longRes = await fetch(
@@ -145,97 +121,37 @@ app.get("/auth/callback", async (req, res) => {
         `&fb_exchange_token=${data.access_token}`
     );
     const longData = await longRes.json();
-    if (longData.error) {
-      console.error("Error getting long-lived token:", longData.error);
-      return res.status(500).send("Auth failed");
-    }
+    if (longData.error) throw new Error(longData.error.message);
 
-    // 3. Get FB user info
+    // 3. Get user info
     const meRes = await fetch(
       `https://graph.facebook.com/v20.0/me?access_token=${longData.access_token}`
     );
     const me = await meRes.json();
 
-    console.log("User logged in:", me);
-
-    // 4. Save or update user token in Supabase (upsert ensures no duplicates)
+    // 4. Save user + token
     await supabase.from("auth_tokens").upsert(
       {
         user_id: me.id,
         access_token: longData.access_token,
         expires_in: longData.expires_in,
       },
-      { onConflict: "user_id" } // <-- tell Supabase to merge on user_id
+      { onConflict: "user_id" }
     );
 
-    console.log("Saved user token in Supabase for user", me.id);
-
-    // 5. Fetch Pages this user manages
+    // 5. Get pages with Instagram accounts
     const pagesRes = await fetch(
       `https://graph.facebook.com/v20.0/me/accounts?fields=id,name,access_token,instagram_business_account&access_token=${longData.access_token}`
     );
-
     const pagesData = await pagesRes.json();
 
     if (pagesData.data && pagesData.data.length > 0) {
       for (const page of pagesData.data) {
-        const pageId = page.id;
-        const pageName = page.name;
-        const pageAccessToken = page.access_token; // included in response
-
-        let igId = null;
-        let igUsername = null;
-
-        // 6. If page has an Instagram business account, fetch IG username
-        if (page.instagram_business_account) {
-          igId = page.instagram_business_account.id;
-
-          // fetch IG username
-          const igRes = await fetch(
-            `https://graph.facebook.com/v20.0/${igId}?fields=username&access_token=${page.access_token}`
-          );
-          const igData = await igRes.json();
-          igUsername = igData.username || null;
-        }
-
-        // 7. Update Supabase row for this user with Page + IG info
-        const { error: updateError } = await supabase
-          .from("auth_tokens")
-          .update({
-            page_id: pageId,
-            page_name: pageName,
-            page_access_token: pageAccessToken,
-            ig_id: igId,
-            ig_username: igUsername,
-          })
-          .eq("user_id", me.id);
-
-        if (updateError) {
-          console.error("Error updating page info:", updateError);
-        } else {
-          console.log(`Updated Supabase with page ${pageName} (${pageId})`);
-        }
-
-        // 8. Auto-subscribe this Page to webhook
-        const subRes = await fetch(
-          `https://graph.facebook.com/v20.0/${pageId}/subscribed_apps`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              subscribed_fields: [
-                "messages",
-                "messaging_postbacks",
-                "message_reactions",
-                "message_deliveries",
-              ],
-              access_token: pageAccessToken,
-            }),
-          }
-        );
-        const subData = await subRes.json();
+        const pageAccessToken = page.access_token;
+        const igId = page.instagram_business_account?.id;
 
         if (igId) {
+          // subscribe only Instagram DMs
           await fetch(
             `https://graph.facebook.com/v20.0/${igId}/subscribed_apps`,
             {
@@ -247,33 +163,18 @@ app.get("/auth/callback", async (req, res) => {
               }),
             }
           );
-          console.log(`✅ Subscribed IG account ${igId}`);
-        }
-
-        if (subData.success) {
-          console.log(`✅ Subscribed page ${pageName} (${pageId}) to webhook`);
-          await supabase
-            .from("auth_tokens")
-            .update({
-              subscribed: true,
-              last_subscribed_at: new Date().toISOString(),
-            })
-            .eq("user_id", me.id);
-        } else {
-          console.error("❌ Failed to subscribe page:", subData);
+          console.log("📡 Subscribed IG account:", igId);
         }
       }
     }
 
-    res.send(
-      "Instagram connected, Pages/IG saved, and webhook subscribed! You can close this window."
-    );
+    res.send("✅ Instagram connected and webhook subscribed!");
   } catch (err) {
-    console.error("Error in callback:", err);
+    console.error("Auth error:", err);
     res.status(500).send("Auth failed");
   }
 });
 
-app.listen(process.env.PORT || 3000, (res, err) =>
-  console.log("Webhook listening on localhost:", process.env.PORT || 3000, err)
+app.listen(process.env.PORT || 3000, () =>
+  console.log("✅ Listening on port", process.env.PORT || 3000)
 );
