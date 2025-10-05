@@ -41,7 +41,6 @@ app.get("/webhook", (req, res) => {
 app.post("/webhook", async (req, res) => {
   try {
     const body = req.body;
-    console.log("Webhook event received:", JSON.stringify(body, null, 2));
 
     if (body.object === "page" || body.object === "instagram") {
       for (const entry of body.entry) {
@@ -131,6 +130,10 @@ app.get("/auth/callback", async (req, res) => {
         `&code=${code}`
     );
     const data = await tokenRes.json();
+    if (data.error) {
+      console.error("Error getting short-lived token:", data.error);
+      return res.status(500).send("Auth failed");
+    }
 
     // 2. Exchange for long-lived token
     const longRes = await fetch(
@@ -141,6 +144,10 @@ app.get("/auth/callback", async (req, res) => {
         `&fb_exchange_token=${data.access_token}`
     );
     const longData = await longRes.json();
+    if (longData.error) {
+      console.error("Error getting long-lived token:", longData.error);
+      return res.status(500).send("Auth failed");
+    }
 
     // 3. Get FB user info
     const meRes = await fetch(
