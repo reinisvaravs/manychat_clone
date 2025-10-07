@@ -44,21 +44,29 @@ app.post("/webhook", async (req, res) => {
     const body = req.body;
     console.log("📥 Webhook received:", JSON.stringify(body, null, 2));
 
-    // only handle instagram DMs
+    // handle incoming Instagram DM payloads (supports only entry.messaging)
     if (body.object === "instagram" && body.entry) {
       for (const entry of body.entry) {
-        if (!entry.changes) continue;
-
-        for (const change of entry.changes) {
-          const val = change.value;
-          if (!val) continue;
-
-          const senderId = val.from || val.sender_id;
-          const text = val.message?.text || val.text || null;
-          const messageId = val.id || val.mid;
-
-          console.log("💬 Instagram DM:", { senderId, text, messageId });
-          await saveMessageToSupabase(entry.id, senderId, text, messageId);
+        if (entry.messaging && Array.isArray(entry.messaging)) {
+          for (const msgEvent of entry.messaging) {
+            const senderId =
+              msgEvent.sender?.id || msgEvent.from || msgEvent.sender_id;
+            const text = msgEvent.message?.text || msgEvent.text || null;
+            const messageId =
+              msgEvent.message?.mid || msgEvent.mid || msgEvent.id;
+            console.log("💬 Instagram DM (messaging):", {
+              senderId,
+              text,
+              messageId,
+            });
+            await saveMessageToSupabase(
+              entry.id || entry.id,
+              senderId,
+              text,
+              messageId
+            );
+          }
+          continue;
         }
       }
     }
@@ -135,7 +143,7 @@ app.get("/auth/callback", async (req, res) => {
       {
         user_id: me.id,
         access_token: longData.access_token,
-        expires_in: longData.expires_in,
+        expires_in: null, // not sure how to track expiry for long-lived tokens yet
       },
       { onConflict: "user_id" }
     );
