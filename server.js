@@ -122,6 +122,7 @@ app.get("/auth/callback", async (req, res) => {
     );
     const longData = await longRes.json();
     if (longData.error) throw new Error(longData.error.message);
+    console.log("Long-lived token:", longData);
 
     // 3. Get user info
     const meRes = await fetch(
